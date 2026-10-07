@@ -48,6 +48,8 @@ type App struct {
 	Protection           *protection.Service
 	Latches              *protection.LatchStore
 	Frost                *protection.FrostProtection
+	ColdwavePredictor    *protection.Predictor
+	ColdwaveActions      *protection.ActionService
 	ExchangerSwitch      *exchanger.SwitchService
 	Circulation          *exchanger.CirculationRunner
 	Antifreeze           *protection.Antifreeze
@@ -100,9 +102,18 @@ func NewApp(dataDirectory string) (*App, error) {
 	pressure := pump.NewPressureMonitor()
 	valveOperations := valve.NewOperations()
 	flowReceipts := telemetry.NewFlowReceipts()
+	appSeries := telemetry.NewSeries(128)
+	latches := protection.NewLatchStore(snapshots)
 	primary := valve.NewPrimaryService()
 	circulation := exchanger.NewCirculationRunner(pumpRunner)
 	antifreeze := protection.NewAntifreeze(circulation)
+	frostProtection := protection.NewFrostProtection(valveOperations)
+	protectionService := protection.NewService()
+	coldwavePredictor, err := protection.NewPredictor(appSeries, protection.DefaultThresholds())
+	if err != nil {
+		return nil, err
+	}
+	coldwaveActions := protection.NewActionService(coldwavePredictor, antifreeze, frostProtection, latches, protectionService)
 	warmup := exchanger.NewWarmupService(stations)
 	relief := valve.NewReliefService(2 * time.Millisecond)
 	boundaries := valve.NewBoundaryService()
@@ -117,10 +128,11 @@ func NewApp(dataDirectory string) (*App, error) {
 		Snapshots: snapshots, Interlock: interlock, Pumps: pump.NewService(interlock, recorder),
 		PumpRunner: pumpRunner, Pressure: pressure, Valves: valve.NewService(interlock, recorder),
 		ValveOperations: valveOperations, Relief: relief, Boundaries: boundaries, Primary: primary,
-		Telemetry: telemetry.NewSeries(128), FlowReceipts: flowReceipts,
+		Telemetry: appSeries, FlowReceipts: flowReceipts,
 		Balancer: hydraulic.NewBalancer(0.28), LeakDetector: hydraulic.NewLeakDetector(),
-		Protection: protection.NewService(), Latches: protection.NewLatchStore(snapshots),
-		Frost: protection.NewFrostProtection(valveOperations), Circulation: circulation, Antifreeze: antifreeze,
+		Protection: protectionService, Latches: latches,
+		Frost: frostProtection, Circulation: circulation, Antifreeze: antifreeze,
+		ColdwavePredictor: coldwavePredictor, ColdwaveActions: coldwaveActions,
 		Warmup: warmup, Isolation: isolationService, IsolationCoordinator: isolation.NewCoordinator(isolationService),
 		Targets: targets, Planner: planner, DispatchBuffer: dispatchBuffer, StationCommands: stationCommands,
 		Manual: station.NewManualService(valveOperations), Maintenance: station.NewMaintenanceService(stations, snapshots),
@@ -149,6 +161,11 @@ func (a *App) seed() error {
 			if err := a.Telemetry.Add(sample); err != nil {
 				return err
 			}
+		}
+		if _, err := a.ColdwavePredictor.SetConfig(protection.WindChillConfig{
+			StationID: item.ID, WindSpeed: 4.5, Humidity: 0.55, Exposure: 1.0,
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -80,6 +80,19 @@ func (s *Series) At(stationID string, kind Kind, watermark uint64) (Sample, bool
 	return items[index], true
 }
 
+func (s *Series) Recent(stationID string, kind Kind, count int) []Sample {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := s.samples[stationID][kind]
+	if count <= 0 || count > len(items) {
+		count = len(items)
+	}
+	recent := items[len(items)-count:]
+	out := make([]Sample, len(recent))
+	copy(out, recent)
+	return out
+}
+
 func (s *Series) Watermarks(stationID string, kinds []Kind) []uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
