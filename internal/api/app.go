@@ -48,6 +48,7 @@ type App struct {
 	Protection           *protection.Service
 	Latches              *protection.LatchStore
 	Frost                *protection.FrostProtection
+	ColdSurge            *protection.ColdSurgeProtection
 	ExchangerSwitch      *exchanger.SwitchService
 	Circulation          *exchanger.CirculationRunner
 	Antifreeze           *protection.Antifreeze
@@ -111,16 +112,23 @@ func NewApp(dataDirectory string) (*App, error) {
 	planner := dispatch.NewPlanner(targets)
 	dispatchBuffer := dispatch.NewBuffer()
 	stationCommands := station.NewCommandService(stations)
+	telemetrySeries := telemetry.NewSeries(128)
+	latchStore := protection.NewLatchStore(snapshots)
+	frostProtection := protection.NewFrostProtection(valveOperations)
+	coldSurge, err := protection.NewColdSurgeProtection(telemetrySeries, antifreeze, frostProtection, latchStore, protection.DefaultColdSurgeConfig())
+	if err != nil {
+		return nil, err
+	}
 	app := &App{
 		DataDirectory: dataDirectory, Events: events, Audit: recorder, AuditQuery: audit.NewQuery(events),
 		Network: networkState, Topology: topology, NetworkRegistry: networkRegistry, Stations: stations,
 		Snapshots: snapshots, Interlock: interlock, Pumps: pump.NewService(interlock, recorder),
 		PumpRunner: pumpRunner, Pressure: pressure, Valves: valve.NewService(interlock, recorder),
 		ValveOperations: valveOperations, Relief: relief, Boundaries: boundaries, Primary: primary,
-		Telemetry: telemetry.NewSeries(128), FlowReceipts: flowReceipts,
+		Telemetry: telemetrySeries, FlowReceipts: flowReceipts,
 		Balancer: hydraulic.NewBalancer(0.28), LeakDetector: hydraulic.NewLeakDetector(),
-		Protection: protection.NewService(), Latches: protection.NewLatchStore(snapshots),
-		Frost: protection.NewFrostProtection(valveOperations), Circulation: circulation, Antifreeze: antifreeze,
+		Protection: protection.NewService(), Latches: latchStore,
+		Frost: frostProtection, ColdSurge: coldSurge, Circulation: circulation, Antifreeze: antifreeze,
 		Warmup: warmup, Isolation: isolationService, IsolationCoordinator: isolation.NewCoordinator(isolationService),
 		Targets: targets, Planner: planner, DispatchBuffer: dispatchBuffer, StationCommands: stationCommands,
 		Manual: station.NewManualService(valveOperations), Maintenance: station.NewMaintenanceService(stations, snapshots),
